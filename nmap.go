@@ -33,6 +33,7 @@ type Scanner struct {
 
 	doneAsync    chan error
 	liveProgress chan float32
+	taskProgress chan TaskProgress
 	streamer     io.Writer
 	toFile       *string
 }
@@ -76,6 +77,13 @@ func (s *Scanner) Async(doneAsync chan error) *Scanner {
 func (s *Scanner) Progress(liveProgress chan float32) *Scanner {
 	s.args = append(s.args, "--stats-every", "100ms")
 	s.liveProgress = liveProgress
+	return s
+}
+
+// TaskProgress is just like progress except it returns the task as well as the percentage
+func (s *Scanner) TaskProgress(taskProgress chan TaskProgress) *Scanner {
+	s.args = append(s.args, "--stats-every", "100ms")
+	s.taskProgress = taskProgress
 	return s
 }
 
@@ -175,6 +183,31 @@ func (s *Scanner) Run() (result *Run, warnings *[]string, err error) {
 					progressIndex := len(p.TaskProgress) - 1
 					if progressIndex >= 0 {
 						s.liveProgress <- p.TaskProgress[progressIndex].Percent
+					}
+				}
+			}
+		}()
+	}
+
+	// Make goroutine to check the task progress every second.
+	// Listening for channel doneProgress.
+	if s.taskProgress != nil {
+		go func() {
+			type progress struct {
+				TaskProgress []TaskProgress `xml:"taskprogress" json:"task_progress"`
+			}
+			p := &progress{}
+			for {
+				select {
+				case <-doneProgress:
+					close(s.taskProgress)
+					return
+				default:
+					time.Sleep(time.Millisecond * 100)
+					_ = xml.Unmarshal(stdout.Bytes(), p)
+					progressIndex := len(p.TaskProgress) - 1
+					if progressIndex >= 0 {
+						s.taskProgress <- p.TaskProgress[progressIndex]
 					}
 				}
 			}
